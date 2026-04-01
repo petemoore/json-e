@@ -44,7 +44,7 @@ preflight() {
     echo "=== Pre-flight checks ==="
 
     # Required binaries
-    for bin in git towncrier twine python npm cargo mdbook yarn; do
+    for bin in git towncrier twine python npm cargo mdbook yarn curl; do
         if ! command -v "$bin" >/dev/null 2>&1; then
             errors+=("Missing binary: $bin")
         fi
@@ -140,9 +140,37 @@ preflight() {
         errors+=("Working tree is not clean — see details below")
     fi
 
-    # Tag doesn't already exist
+    # Repo state: local main must match upstream main
+    if [ -n "${REMOTE:-}" ] && [ "$branch" == "main" ]; then
+        local local_head remote_head
+        local_head=$(git rev-parse HEAD)
+        remote_head=$(git ls-remote "$REMOTE" refs/heads/main 2>/dev/null | cut -f1)
+        if [ -n "$remote_head" ] && [ "$local_head" != "$remote_head" ]; then
+            errors+=("Local main ($local_head) differs from $REMOTE/main ($remote_head). Run: git pull --ff-only $REMOTE main")
+        fi
+    fi
+
+    # Tag doesn't already exist (locally or on remote)
     if git rev-parse "v${version}" >/dev/null 2>&1; then
-        errors+=("Tag v${version} already exists")
+        errors+=("Tag v${version} already exists locally")
+    fi
+    if [ -n "${REMOTE:-}" ]; then
+        local remote_tag
+        remote_tag=$(git ls-remote --tags "$REMOTE" "refs/tags/v${version}" 2>/dev/null | cut -f1)
+        if [ -n "$remote_tag" ]; then
+            errors+=("Tag v${version} already exists on remote '$REMOTE'")
+        fi
+    fi
+
+    # Package not already published to registries
+    if curl -sf "https://registry.npmjs.org/json-e/${version}" >/dev/null 2>&1; then
+        errors+=("Version ${version} already published on npm")
+    fi
+    if curl -sf "https://pypi.org/pypi/json-e/${version}/json" >/dev/null 2>&1; then
+        errors+=("Version ${version} already published on PyPI")
+    fi
+    if curl -sf "https://crates.io/api/v1/crates/json-e/${version}" >/dev/null 2>&1; then
+        errors+=("Version ${version} already published on crates.io")
     fi
 
     # Report
